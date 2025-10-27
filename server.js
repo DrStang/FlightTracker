@@ -12,6 +12,25 @@ require('dotenv').config();
 
 const flightService = require('./flightService');
 
+// Database integration (optional - falls back to in-memory)
+let db = null;
+let FlightModel, EmployeeModel, FlightStatusHistoryModel, AuditModel;
+const USE_DATABASE = !!process.env.DATABASE_URL;
+
+if (USE_DATABASE) {
+  try {
+    db = require('./database');
+    const models = require('./models');
+    FlightModel = models.FlightModel;
+    EmployeeModel = models.EmployeeModel;
+    FlightStatusHistoryModel = models.FlightStatusHistoryModel;
+    AuditModel = models.AuditModel;
+    console.log('✅ Database mode enabled');
+  } catch (error) {
+    console.warn('⚠️  Database connection failed, using in-memory storage:', error.message);
+  }
+}
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -104,7 +123,14 @@ const upload = multer({
  * Update flight status by calling FlightAware API
  */
 async function updateFlightStatus(flightId) {
-  const flight = flights.find(f => f.id === flightId);
+  let flight;
+  
+  // Get flight from database or memory
+  if (USE_DATABASE && FlightModel) {
+    flight = await FlightModel.getById(flightId);
+  } else {
+    flight = flights.find(f => f.id === flightId);
+  }
   
   if (!flight) {
     console.error(`Flight ${flightId} not found`);
@@ -112,24 +138,51 @@ async function updateFlightStatus(flightId) {
   }
 
   try {
-    flight.status = 'checking';
+    // Update to checking status
+    if (USE_DATABASE && FlightModel) {
+      await FlightModel.update(flightId, { status: 'checking' });
+    } else {
+      flight.status = 'checking';
+    }
     
     const statusData = await flightService.getFlightStatus(
-      flight.flightNumber,
-      flight.departureTime
+      flight.flight_number || flight.flightNumber,
+      flight.departure_time || flight.departureTime
     );
 
-    flight.status = statusData.status;
-    flight.statusDetails = statusData.details;
-    flight.lastChecked = new Date().toISOString();
-    flight.updatedAt = new Date().toISOString();
+    const updateData = {
+      status: statusData.status,
+      status_details: statusData.details,
+      last_checked: new Date().toISOString()
+    };
 
-    console.log(`✅ Updated flight ${flight.flightNumber}: ${flight.status}`);
+    // Save to database or memory
+    if (USE_DATABASE && FlightModel) {
+      await FlightModel.update(flightId, updateData);
+    } else {
+      flight.status = statusData.status;
+      flight.statusDetails = statusData.details;
+      flight.lastChecked = new Date().toISOString();
+      flight.updatedAt = new Date().toISOString();
+    }
+
+    console.log(`✅ Updated flight ${flight.flight_number || flight.flightNumber}: ${statusData.status}`);
   } catch (error) {
-    console.error(`❌ Error updating flight ${flight.flightNumber}:`, error.message);
-    flight.status = 'error';
-    flight.statusDetails = { message: error.message };
-    flight.lastChecked = new Date().toISOString();
+    console.error(`❌ Error updating flight ${flight.flight_number || flight.flightNumber}:`, error.message);
+    
+    const errorData = {
+      status: 'error',
+      status_details: { message: error.message },
+      last_checked: new Date().toISOString()
+    };
+
+    if (USE_DATABASE && FlightModel) {
+      await FlightModel.update(flightId, errorData);
+    } else {
+      flight.status = 'error';
+      flight.statusDetails = { message: error.message };
+      flight.lastChecked = new Date().toISOString();
+    }
   }
 }
 
@@ -137,9 +190,17 @@ async function updateFlightStatus(flightId) {
  * Update all flights' statuses
  */
 async function updateAllFlights() {
-  console.log(`🔄 Starting status update for ${flights.length} flights...`);
+  let allFlights;
   
-  for (const flight of flights) {
+  if (USE_DATABASE && FlightModel) {
+    allFlights = await FlightModel.getAll({ recentOnly: true });
+  } else {
+    allFlights = flights;
+  }
+  
+  console.log(`🔄 Starting status update for ${allFlights.length} flights...`);
+  
+  for (const flight of allFlights) {
     await updateFlightStatus(flight.id);
     // Add small delay to avoid rate limiting
     await new Promise(resolve => setTimeout(resolve, 1000));
@@ -149,22 +210,29 @@ async function updateAllFlights() {
 }
 
 /**
- * Clean up old flights (older than 24 hours after arrival)
+ * Clean up old flights (older than 48 hours after departure)
  */
-function cleanupOldFlights() {
-  const now = new Date();
-  const before = flights.length;
+async function cleanupOldFlights() {
+  let removed = 0;
   
-  flights = flights.filter(flight => {
-    if (!flight.departureTime) return true;
+  if (USE_DATABASE && FlightModel) {
+    removed = await FlightModel.cleanupOld(48);
+  } else {
+    const now = new Date();
+    const before = flights.length;
     
-    const departureTime = new Date(flight.departureTime);
-    const hoursSinceDeparture = (now - departureTime) / (1000 * 60 * 60);
+    flights = flights.filter(flight => {
+      if (!flight.departureTime) return true;
+      
+      const departureTime = new Date(flight.departureTime);
+      const hoursSinceDeparture = (now - departureTime) / (1000 * 60 * 60);
+      
+      return hoursSinceDeparture < 48; // Keep flights from last 48 hours
+    });
     
-    return hoursSinceDeparture < 48; // Keep flights from last 48 hours
-  });
+    removed = before - flights.length;
+  }
   
-  const removed = before - flights.length;
   if (removed > 0) {
     console.log(`🗑️  Cleaned up ${removed} old flights`);
   }
@@ -177,43 +245,93 @@ function cleanupOldFlights() {
 /**
  * Health check endpoint
  */
-app.get('/api/health', (req, res) => {
+app.get('/api/health', async (req, res) => {
+  let flightsCount = 0;
+  let databaseStatus = 'not configured';
+  
+  try {
+    if (USE_DATABASE && FlightModel) {
+      const allFlights = await FlightModel.getAll({ recentOnly: false, limit: 1000 });
+      flightsCount = allFlights.length;
+      databaseStatus = 'connected';
+    } else {
+      flightsCount = flights.length;
+      databaseStatus = 'in-memory mode';
+    }
+  } catch (error) {
+    databaseStatus = 'error: ' + error.message;
+  }
+  
   res.json({
     status: 'ok',
     timestamp: new Date().toISOString(),
     uptime: process.uptime(),
-    flightsTracked: flights.length
+    flightsTracked: flightsCount,
+    database: databaseStatus,
+    usingDatabase: USE_DATABASE
   });
 });
 
 /**
  * Get all flights
  */
-app.get('/api/flights', (req, res) => {
-  res.json({
-    success: true,
-    count: flights.length,
-    flights: flights
-  });
+app.get('/api/flights', async (req, res) => {
+  try {
+    let allFlights;
+    
+    if (USE_DATABASE && FlightModel) {
+      allFlights = await FlightModel.getAll({ recentOnly: true });
+    } else {
+      allFlights = flights;
+    }
+    
+    res.json({
+      success: true,
+      count: allFlights.length,
+      flights: allFlights,
+      usingDatabase: USE_DATABASE
+    });
+  } catch (error) {
+    console.error('Error fetching flights:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch flights'
+    });
+  }
 });
 
 /**
  * Get single flight by ID
  */
-app.get('/api/flights/:id', (req, res) => {
-  const flight = flights.find(f => f.id === parseInt(req.params.id));
-  
-  if (!flight) {
-    return res.status(404).json({
+app.get('/api/flights/:id', async (req, res) => {
+  try {
+    const flightId = parseInt(req.params.id);
+    let flight;
+    
+    if (USE_DATABASE && FlightModel) {
+      flight = await FlightModel.getById(flightId);
+    } else {
+      flight = flights.find(f => f.id === flightId);
+    }
+    
+    if (!flight) {
+      return res.status(404).json({
+        success: false,
+        error: 'Flight not found'
+      });
+    }
+    
+    res.json({
+      success: true,
+      flight: flight
+    });
+  } catch (error) {
+    console.error('Error fetching flight:', error);
+    res.status(500).json({
       success: false,
-      error: 'Flight not found'
+      error: 'Failed to fetch flight'
     });
   }
-  
-  res.json({
-    success: true,
-    flight: flight
-  });
 });
 
 /**
@@ -231,22 +349,36 @@ app.post('/api/flights', async (req, res) => {
       });
     }
 
-    // Create new flight object
-    const newFlight = {
-      id: nextId++,
-      employeeName,
-      flightNumber: flightNumber.toUpperCase().replace(/\s/g, ''),
-      departureTime: departureTime || new Date().toISOString(),
-      origin: origin?.toUpperCase() || null,
-      destination: destination?.toUpperCase() || null,
-      status: 'checking',
-      statusDetails: {},
-      lastChecked: null,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
-    };
-
-    flights.push(newFlight);
+    let newFlight;
+    
+    if (USE_DATABASE && FlightModel) {
+      // Use database
+      newFlight = await FlightModel.create({
+        employeeName,
+        flightNumber: flightNumber.toUpperCase().replace(/\s/g, ''),
+        departureTime: departureTime || new Date().toISOString(),
+        origin: origin?.toUpperCase() || null,
+        destination: destination?.toUpperCase() || null,
+        status: 'checking',
+        statusDetails: {}
+      });
+    } else {
+      // Use in-memory storage
+      newFlight = {
+        id: nextId++,
+        employeeName,
+        flightNumber: flightNumber.toUpperCase().replace(/\s/g, ''),
+        departureTime: departureTime || new Date().toISOString(),
+        origin: origin?.toUpperCase() || null,
+        destination: destination?.toUpperCase() || null,
+        status: 'checking',
+        statusDetails: {},
+        lastChecked: null,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+      flights.push(newFlight);
+    }
 
     // Fetch initial status (async, don't wait)
     updateFlightStatus(newFlight.id).catch(err => {
@@ -256,7 +388,8 @@ app.post('/api/flights', async (req, res) => {
     res.status(201).json({
       success: true,
       flight: newFlight,
-      message: 'Flight added successfully'
+      message: 'Flight added successfully',
+      usingDatabase: USE_DATABASE
     });
   } catch (error) {
     console.error('Error adding flight:', error);
@@ -273,36 +406,70 @@ app.post('/api/flights', async (req, res) => {
 app.put('/api/flights/:id', async (req, res) => {
   try {
     const flightId = parseInt(req.params.id);
-    const flight = flights.find(f => f.id === flightId);
+    
+    if (USE_DATABASE && FlightModel) {
+      const flight = await FlightModel.getById(flightId);
+      
+      if (!flight) {
+        return res.status(404).json({
+          success: false,
+          error: 'Flight not found'
+        });
+      }
 
-    if (!flight) {
-      return res.status(404).json({
-        success: false,
-        error: 'Flight not found'
+      const { employeeName, flightNumber, departureTime, origin, destination } = req.body;
+      
+      const updateData = {};
+      if (employeeName) updateData.employee_name = employeeName;
+      if (flightNumber) updateData.flight_number = flightNumber.toUpperCase().replace(/\s/g, '');
+      if (departureTime) updateData.departure_time = departureTime;
+      if (origin) updateData.origin = origin.toUpperCase();
+      if (destination) updateData.destination = destination.toUpperCase();
+
+      const updatedFlight = await FlightModel.update(flightId, updateData);
+
+      // Refresh status if flight number changed
+      if (flightNumber) {
+        await updateFlightStatus(flightId);
+      }
+
+      res.json({
+        success: true,
+        flight: updatedFlight,
+        message: 'Flight updated successfully'
+      });
+    } else {
+      const flight = flights.find(f => f.id === flightId);
+
+      if (!flight) {
+        return res.status(404).json({
+          success: false,
+          error: 'Flight not found'
+        });
+      }
+
+      const { employeeName, flightNumber, departureTime, origin, destination } = req.body;
+
+      // Update fields
+      if (employeeName) flight.employeeName = employeeName;
+      if (flightNumber) flight.flightNumber = flightNumber.toUpperCase().replace(/\s/g, '');
+      if (departureTime) flight.departureTime = departureTime;
+      if (origin) flight.origin = origin.toUpperCase();
+      if (destination) flight.destination = destination.toUpperCase();
+      
+      flight.updatedAt = new Date().toISOString();
+
+      // Refresh status if flight number changed
+      if (flightNumber) {
+        await updateFlightStatus(flightId);
+      }
+
+      res.json({
+        success: true,
+        flight: flight,
+        message: 'Flight updated successfully'
       });
     }
-
-    const { employeeName, flightNumber, departureTime, origin, destination } = req.body;
-
-    // Update fields
-    if (employeeName) flight.employeeName = employeeName;
-    if (flightNumber) flight.flightNumber = flightNumber.toUpperCase().replace(/\s/g, '');
-    if (departureTime) flight.departureTime = departureTime;
-    if (origin) flight.origin = origin.toUpperCase();
-    if (destination) flight.destination = destination.toUpperCase();
-    
-    flight.updatedAt = new Date().toISOString();
-
-    // Refresh status if flight number changed
-    if (flightNumber) {
-      await updateFlightStatus(flightId);
-    }
-
-    res.json({
-      success: true,
-      flight: flight,
-      message: 'Flight updated successfully'
-    });
   } catch (error) {
     console.error('Error updating flight:', error);
     res.status(500).json({
@@ -315,24 +482,45 @@ app.put('/api/flights/:id', async (req, res) => {
 /**
  * Delete a flight
  */
-app.delete('/api/flights/:id', (req, res) => {
-  const flightId = parseInt(req.params.id);
-  const index = flights.findIndex(f => f.id === flightId);
+app.delete('/api/flights/:id', async (req, res) => {
+  try {
+    const flightId = parseInt(req.params.id);
+    let deletedFlight;
+    
+    if (USE_DATABASE && FlightModel) {
+      deletedFlight = await FlightModel.delete(flightId);
+      
+      if (!deletedFlight) {
+        return res.status(404).json({
+          success: false,
+          error: 'Flight not found'
+        });
+      }
+    } else {
+      const index = flights.findIndex(f => f.id === flightId);
 
-  if (index === -1) {
-    return res.status(404).json({
+      if (index === -1) {
+        return res.status(404).json({
+          success: false,
+          error: 'Flight not found'
+        });
+      }
+
+      deletedFlight = flights.splice(index, 1)[0];
+    }
+
+    res.json({
+      success: true,
+      flight: deletedFlight,
+      message: 'Flight deleted successfully'
+    });
+  } catch (error) {
+    console.error('Error deleting flight:', error);
+    res.status(500).json({
       success: false,
-      error: 'Flight not found'
+      error: 'Failed to delete flight'
     });
   }
-
-  const deletedFlight = flights.splice(index, 1)[0];
-
-  res.json({
-    success: true,
-    flight: deletedFlight,
-    message: 'Flight deleted successfully'
-  });
 });
 
 /**
@@ -411,21 +599,35 @@ app.post('/api/flights/upload', upload.single('file'), async (req, res) => {
           continue;
         }
 
-        const newFlight = {
-          id: nextId++,
-          employeeName,
-          flightNumber: String(flightNumber).toUpperCase().replace(/\s/g, ''),
-          departureTime: departureTime ? new Date(departureTime).toISOString() : new Date().toISOString(),
-          origin: origin ? String(origin).toUpperCase() : null,
-          destination: destination ? String(destination).toUpperCase() : null,
-          status: 'checking',
-          statusDetails: {},
-          lastChecked: null,
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString()
-        };
+        let newFlight;
+        
+        if (USE_DATABASE && FlightModel) {
+          newFlight = await FlightModel.create({
+            employeeName,
+            flightNumber: String(flightNumber).toUpperCase().replace(/\s/g, ''),
+            departureTime: departureTime ? new Date(departureTime).toISOString() : new Date().toISOString(),
+            origin: origin ? String(origin).toUpperCase() : null,
+            destination: destination ? String(destination).toUpperCase() : null,
+            status: 'checking',
+            statusDetails: {}
+          });
+        } else {
+          newFlight = {
+            id: nextId++,
+            employeeName,
+            flightNumber: String(flightNumber).toUpperCase().replace(/\s/g, ''),
+            departureTime: departureTime ? new Date(departureTime).toISOString() : new Date().toISOString(),
+            origin: origin ? String(origin).toUpperCase() : null,
+            destination: destination ? String(destination).toUpperCase() : null,
+            status: 'checking',
+            statusDetails: {},
+            lastChecked: null,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString()
+          };
+          flights.push(newFlight);
+        }
 
-        flights.push(newFlight);
         addedFlights.push(newFlight);
       } catch (error) {
         errors.push(`Row ${i + 1}: ${error.message}`);
@@ -445,7 +647,8 @@ app.post('/api/flights/upload', upload.single('file'), async (req, res) => {
       message: `Uploaded ${addedFlights.length} flights`,
       added: addedFlights.length,
       errors: errors.length > 0 ? errors : undefined,
-      flights: addedFlights
+      flights: addedFlights,
+      usingDatabase: USE_DATABASE
     });
   } catch (error) {
     console.error('Error processing upload:', error);
@@ -470,22 +673,34 @@ app.get('/api/search', async (req, res) => {
       });
     }
 
-    // Search in tracked flights first
-    let results = flights.filter(flight => {
-      let matches = true;
+    let results;
+    
+    if (USE_DATABASE && FlightModel) {
+      // Use database search with filters
+      const filters = {};
+      if (flightNumber) filters.flightNumber = flightNumber;
+      if (origin) filters.origin = origin.toUpperCase();
+      if (destination) filters.destination = destination.toUpperCase();
       
-      if (flightNumber) {
-        matches = matches && flight.flightNumber.includes(flightNumber.toUpperCase());
-      }
-      if (origin) {
-        matches = matches && flight.origin === origin.toUpperCase();
-      }
-      if (destination) {
-        matches = matches && flight.destination === destination.toUpperCase();
-      }
-      
-      return matches;
-    });
+      results = await FlightModel.getAll(filters);
+    } else {
+      // Search in tracked flights
+      results = flights.filter(flight => {
+        let matches = true;
+        
+        if (flightNumber) {
+          matches = matches && flight.flightNumber.includes(flightNumber.toUpperCase());
+        }
+        if (origin) {
+          matches = matches && flight.origin === origin.toUpperCase();
+        }
+        if (destination) {
+          matches = matches && flight.destination === destination.toUpperCase();
+        }
+        
+        return matches;
+      });
+    }
 
     res.json({
       success: true,
