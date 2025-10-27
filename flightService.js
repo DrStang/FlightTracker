@@ -13,7 +13,7 @@ class FlightService {
     this.baseURL = 'https://aeroapi.flightaware.com/aeroapi';
     
     if (!this.apiKey) {
-      console.warn('⚠️  FLIGHTAWARE_API_KEY not set. Using mock data for demonstration.');
+      console.warn('âš ï¸  FLIGHTAWARE_API_KEY not set. Using mock data for demonstration.');
     }
   }
 
@@ -36,20 +36,12 @@ class FlightService {
       // Format the ident for FlightAware (e.g., "AA1234")
       const ident = `${parsedFlight.airline}${parsedFlight.number}`;
 
-      // Build query parameters
-      const params = {
-        ident: ident,
-        ident_type: 'designator'
-      };
+      // Build query parameters - FlightAware API v4 format
+      // Note: The /flights/{ident} endpoint returns recent flights automatically
+      // and doesn't require start/end parameters
+      const params = {};
 
-      // If departure time provided, add it to filter results
-      if (departureTime) {
-        const date = new Date(departureTime);
-        params.start = date.toISOString();
-        params.end = new Date(date.getTime() + 24 * 60 * 60 * 1000).toISOString();
-      }
-
-      // Make API request to FlightAware
+      // Make API request to FlightAware - correct endpoint format
       const response = await axios.get(`${this.baseURL}/flights/${ident}`, {
         params: params,
         headers: {
@@ -205,7 +197,7 @@ class FlightService {
         destination: 'LAX',
         scheduledDeparture: new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString(),
         estimatedArrival: new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString(),
-        note: '⚠️ Using mock data - Set FLIGHTAWARE_API_KEY for real data'
+        note: 'âš ï¸ Using mock data - Set FLIGHTAWARE_API_KEY for real data'
       }
     };
   }
