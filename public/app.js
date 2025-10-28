@@ -10,6 +10,7 @@ const API_ENDPOINTS = {
 // Application state
 let flights = [];
 let autoRefreshInterval = null;
+let showPastFlights = false;
 
 // Initialize application
 document.addEventListener('DOMContentLoaded', () => {
@@ -115,13 +116,48 @@ function isFlightInPast(flight) {
 function renderFlights() {
     const container = document.getElementById('flightsContainer');
     
-    if (flights.length === 0) {
-        renderEmptyState();
+    // Filter based on showPastFlights toggle
+    const displayFlights = showPastFlights 
+        ? flights 
+        : flights.filter(f => !isFlightInPast(f));
+    
+    if (displayFlights.length === 0) {
+        if (showPastFlights && flights.length > 0) {
+            // Show message if no past flights exist
+            container.innerHTML = `
+                <div class="empty-state">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" 
+                              d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    <h3>No past flights</h3>
+                    <p>Past flights will appear here after they've completed</p>
+                </div>
+            `;
+        } else {
+            renderEmptyState();
+        }
         return;
     }
     
-    const flightCards = flights.map(flight => renderFlightCard(flight)).join('');
+    // Update flight count in UI
+    updateFlightCount(displayFlights.length, flights.length);
+    
+    const flightCards = displayFlights.map(flight => renderFlightCard(flight)).join('');
     container.innerHTML = flightCards;
+}
+
+// Update flight count display
+function updateFlightCount(displayCount, totalCount) {
+    const countElement = document.getElementById('flightCount');
+    if (countElement) {
+        const pastCount = totalCount - displayCount;
+        if (showPastFlights) {
+            countElement.textContent = `Showing all ${totalCount} flights`;
+        } else {
+            countElement.textContent = `${displayCount} active flight${displayCount !== 1 ? 's' : ''}${pastCount > 0 ? ` (${pastCount} past)` : ''}`;
+        }
+    }
 }
 
 // Render a single flight card
@@ -320,6 +356,26 @@ function setupEventListeners() {
         e.preventDefault();
         downloadSampleTemplate();
     });
+    
+    // Toggle past flights button
+    const toggleBtn = document.getElementById('togglePastFlights');
+    if (toggleBtn) {
+        toggleBtn.addEventListener('click', togglePastFlightsView);
+    }
+}
+
+// Toggle past flights view
+function togglePastFlightsView() {
+    showPastFlights = !showPastFlights;
+    const btn = document.getElementById('togglePastFlights');
+    
+    if (btn) {
+        btn.textContent = showPastFlights ? '👁️ Hide Past Flights' : '📜 Show Past Flights';
+        btn.style.background = showPastFlights ? '#718096' : '#4299e1';
+    }
+    
+    renderFlights();
+    showToast(showPastFlights ? 'Showing all flights' : 'Showing active flights only', 'info');
 }
 
 // Handle manual form submission
