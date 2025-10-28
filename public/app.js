@@ -73,13 +73,47 @@ async function loadFlights() {
     }
 }
 
+/**
+ * Check if a flight is in the past (should match server-side logic)
+ */
+function isFlightInPast(flight) {
+    const now = new Date();
+    const statusDetails = flight.status_details || flight.statusDetails || {};
+    
+    // If we have actual arrival time and it's more than 2 hours ago
+    if (statusDetails.actualArrival) {
+        const actualArrival = new Date(statusDetails.actualArrival);
+        const hoursSinceLanding = (now - actualArrival) / (1000 * 60 * 60);
+        return hoursSinceLanding > 2;
+    }
+    
+    // If we have estimated arrival and it's more than 2 hours ago
+    if (statusDetails.estimatedArrival) {
+        const estimatedArrival = new Date(statusDetails.estimatedArrival);
+        const hoursSinceEstimated = (now - estimatedArrival) / (1000 * 60 * 60);
+        return hoursSinceEstimated > 2;
+    }
+    
+    // If scheduled arrival is more than 4 hours ago
+    if (statusDetails.scheduledArrival) {
+        const scheduledArrival = new Date(statusDetails.scheduledArrival);
+        const hoursSinceScheduled = (now - scheduledArrival) / (1000 * 60 * 60);
+        return hoursSinceScheduled > 4;
+    }
+    
+    // If departure time is more than 8 hours ago and we have no arrival info
+    const departureTime = new Date(flight.departure_time || flight.departureTime);
+    if (!isNaN(departureTime.getTime())) {
+        const hoursSinceDeparture = (now - departureTime) / (1000 * 60 * 60);
+        return hoursSinceDeparture > 8;
+    }
+    
+    return false;
+}
+
 // Render flights in card layout
 function renderFlights() {
     const container = document.getElementById('flightsContainer');
-
-    const displayFlights = showPastFlights
-        ? flights
-        : flights.filter(f => !isFlightInPast(f));
     
     if (flights.length === 0) {
         renderEmptyState();
@@ -88,16 +122,6 @@ function renderFlights() {
     
     const flightCards = flights.map(flight => renderFlightCard(flight)).join('');
     container.innerHTML = flightCards;
-}
-
-function isFlightInPast(flight) {
-    const now = new Date();
-    const departureTime = new Date(flight.departure_time || flight.departureTime);
-
-    if (isNaN(departureTime.getTime())) return false;
-
-    const hoursSinceDeparture = (now - departureTime) / (1000 * 60 * 60);
-    return hoursSinceDeparture > 8; 
 }
 
 // Render a single flight card
@@ -297,14 +321,6 @@ function setupEventListeners() {
         downloadSampleTemplate();
     });
 }
-let showPastFlights = false;
-
-document.getElementById('togglePastFlights').addEventListener('click', () => {
-    showPastFlights = !showPastFlights;
-    const btn = document.getElementById('togglePastFlights');
-    btn.textContent = showPastFlights ? 'Hide Past Flights' : 'Show Past Flights';
-    renderFlights();
-});
 
 // Handle manual form submission
 async function handleManualFormSubmit(event) {
