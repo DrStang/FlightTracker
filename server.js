@@ -25,9 +25,9 @@ if (USE_DATABASE) {
     EmployeeModel = models.EmployeeModel;
     FlightStatusHistoryModel = models.FlightStatusHistoryModel;
     AuditModel = models.AuditModel;
-    console.log('✅ Database mode enabled');
+    console.log('âœ… Database mode enabled');
   } catch (error) {
-    console.warn('⚠️  Database connection failed, using in-memory storage:', error.message);
+    console.warn('âš ï¸  Database connection failed, using in-memory storage:', error.message);
   }
 }
 
@@ -120,6 +120,83 @@ const upload = multer({
 // ============================================
 
 /**
+ * Determine if a flight should be actively monitored
+ * Only monitor flights that are:
+ * - Within 7 days before departure
+ * - Not yet landed (or within 6 hours after scheduled arrival)
+ */
+function shouldMonitorFlight(flight) {
+  const now = new Date();
+  const departureTime = new Date(flight.departure_time || flight.departureTime);
+  
+  // Check if flight is more than 7 days in the future
+  const daysUntilDeparture = (departureTime - now) / (1000 * 60 * 60 * 24);
+  if (daysUntilDeparture > 7) {
+    return false; // Too far in the future
+  }
+  
+  // Check if flight has landed (use actual arrival if available, otherwise estimate)
+  const statusDetails = flight.status_details || flight.statusDetails || {};
+  
+  // If we have actual arrival time, check if it's more than 6 hours ago
+  if (statusDetails.actualArrival) {
+    const actualArrival = new Date(statusDetails.actualArrival);
+    const hoursSinceLanding = (now - actualArrival) / (1000 * 60 * 60);
+    if (hoursSinceLanding > 6) {
+      return false; // Flight landed more than 6 hours ago
+    }
+  }
+  
+  // If we have estimated arrival, check if it's in the past
+  if (statusDetails.estimatedArrival) {
+    const estimatedArrival = new Date(statusDetails.estimatedArrival);
+    const hoursSinceEstimatedArrival = (now - estimatedArrival) / (1000 * 60 * 60);
+    if (hoursSinceEstimatedArrival > 6) {
+      return false; // Estimated arrival was more than 6 hours ago
+    }
+  }
+  
+  // If flight is cancelled, stop monitoring after 24 hours
+  if (flight.status === 'cancelled') {
+    const hoursSinceLastCheck = flight.last_checked || flight.lastChecked 
+      ? (now - new Date(flight.last_checked || flight.lastChecked)) / (1000 * 60 * 60)
+      : 0;
+    if (hoursSinceLastCheck > 24) {
+      return false; // Cancelled flight, no need to keep checking
+    }
+  }
+  
+  return true; // Flight should be monitored
+}
+
+/**
+ * Check if a flight is in the past (landed and completed)
+ */
+function isFlightInPast(flight) {
+  const now = new Date();
+  const statusDetails = flight.status_details || flight.statusDetails || {};
+  
+  // If we have actual arrival time and it's more than 6 hours ago
+  if (statusDetails.actualArrival) {
+    const actualArrival = new Date(statusDetails.actualArrival);
+    const hoursSinceLanding = (now - actualArrival) / (1000 * 60 * 60);
+    return hoursSinceLanding > 6;
+  }
+  
+  // If scheduled arrival is more than 12 hours ago, consider it past
+  if (statusDetails.scheduledArrival) {
+    const scheduledArrival = new Date(statusDetails.scheduledArrival);
+    const hoursSinceScheduled = (now - scheduledArrival) / (1000 * 60 * 60);
+    return hoursSinceScheduled > 12;
+  }
+  
+  // If departure time is more than 24 hours ago and we have no arrival info
+  const departureTime = new Date(flight.departure_time || flight.departureTime);
+  const hoursSinceDeparture = (now - departureTime) / (1000 * 60 * 60);
+  return hoursSinceDeparture > 24;
+}
+
+/**
  * Update flight status by calling FlightAware API
  */
 async function updateFlightStatus(flightId) {
@@ -166,9 +243,9 @@ async function updateFlightStatus(flightId) {
       flight.updatedAt = new Date().toISOString();
     }
 
-    console.log(`✅ Updated flight ${flight.flight_number || flight.flightNumber}: ${statusData.status}`);
+    console.log(`âœ… Updated flight ${flight.flight_number || flight.flightNumber}: ${statusData.status}`);
   } catch (error) {
-    console.error(`❌ Error updating flight ${flight.flight_number || flight.flightNumber}:`, error.message);
+    console.error(`âŒ Error updating flight ${flight.flight_number || flight.flightNumber}:`, error.message);
     
     const errorData = {
       status: 'error',
@@ -198,15 +275,29 @@ async function updateAllFlights() {
     allFlights = flights;
   }
   
-  console.log(`🔄 Starting status update for ${allFlights.length} flights...`);
+  // Filter to only flights that should be actively monitored
+  const activeFlights = allFlights.filter(flight => shouldMonitorFlight(flight));
+  const skippedCount = allFlights.length - activeFlights.length;
   
-  for (const flight of allFlights) {
+  console.log('Starting status update for ' + allFlights.length + ' flights...');
+  if (skippedCount > 0) {
+    console.log('  Skipping ' + skippedCount + ' flights (too far out or already landed)');
+  }
+  console.log('  Monitoring ' + activeFlights.length + ' active flights');
+  
+  for (const flight of activeFlights) {
+    const departureTime = new Date(flight.departure_time || flight.departureTime);
+    const now = new Date();
+    const daysUntil = ((departureTime - now) / (1000 * 60 * 60 * 24)).toFixed(1);
+    
+    console.log('    Checking ' + (flight.flight_number || flight.flightNumber) + ' (' + daysUntil + ' days until departure)');
+    
     await updateFlightStatus(flight.id);
     // Add small delay to avoid rate limiting
     await new Promise(resolve => setTimeout(resolve, 1000));
   }
   
-  console.log('✅ Status update complete');
+  console.log('Status update complete');
 }
 
 /**
@@ -228,13 +319,91 @@ async function cleanupOldFlights() {
       const hoursSinceDeparture = (now - departureTime) / (1000 * 60 * 60);
       
       return hoursSinceDeparture < 48; // Keep flights from last 48 hours
-    });
+    }
+/**
+ * Determine if a flight should be actively monitored
+ * Only monitor flights that are:
+ * - Within 7 days before departure
+ * - Not yet landed (or within 6 hours after scheduled arrival)
+ */
+function shouldMonitorFlight(flight) {
+  const now = new Date();
+  const departureTime = new Date(flight.departure_time || flight.departureTime);
+  
+  // Check if flight is more than 7 days in the future
+  const daysUntilDeparture = (departureTime - now) / (1000 * 60 * 60 * 24);
+  if (daysUntilDeparture > 7) {
+    return false; // Too far in the future
+  }
+  
+  // Check if flight has landed (use actual arrival if available, otherwise estimate)
+  const statusDetails = flight.status_details || flight.statusDetails || {};
+  
+  // If we have actual arrival time, check if it's more than 6 hours ago
+  if (statusDetails.actualArrival) {
+    const actualArrival = new Date(statusDetails.actualArrival);
+    const hoursSinceLanding = (now - actualArrival) / (1000 * 60 * 60);
+    if (hoursSinceLanding > 6) {
+      return false; // Flight landed more than 6 hours ago
+    }
+  }
+  
+  // If we have estimated arrival, check if it's in the past
+  if (statusDetails.estimatedArrival) {
+    const estimatedArrival = new Date(statusDetails.estimatedArrival);
+    const hoursSinceEstimatedArrival = (now - estimatedArrival) / (1000 * 60 * 60);
+    if (hoursSinceEstimatedArrival > 6) {
+      return false; // Estimated arrival was more than 6 hours ago
+    }
+  }
+  
+  // If flight is cancelled, stop monitoring after 24 hours
+  if (flight.status === 'cancelled') {
+    const hoursSinceLastCheck = flight.last_checked || flight.lastChecked 
+      ? (now - new Date(flight.last_checked || flight.lastChecked)) / (1000 * 60 * 60)
+      : 0;
+    if (hoursSinceLastCheck > 24) {
+      return false; // Cancelled flight, no need to keep checking
+    }
+  }
+  
+  return true; // Flight should be monitored
+}
+
+/**
+ * Check if a flight is in the past (landed and completed)
+ */
+function isFlightInPast(flight) {
+  const now = new Date();
+  const statusDetails = flight.status_details || flight.statusDetails || {};
+  
+  // If we have actual arrival time and it's more than 6 hours ago
+  if (statusDetails.actualArrival) {
+    const actualArrival = new Date(statusDetails.actualArrival);
+    const hoursSinceLanding = (now - actualArrival) / (1000 * 60 * 60);
+    return hoursSinceLanding > 6;
+  }
+  
+  // If scheduled arrival is more than 12 hours ago, consider it past
+  if (statusDetails.scheduledArrival) {
+    const scheduledArrival = new Date(statusDetails.scheduledArrival);
+    const hoursSinceScheduled = (now - scheduledArrival) / (1000 * 60 * 60);
+    return hoursSinceScheduled > 12;
+  }
+  
+  // If departure time is more than 24 hours ago and we have no arrival info
+  const departureTime = new Date(flight.departure_time || flight.departureTime);
+  const hoursSinceDeparture = (now - departureTime) / (1000 * 60 * 60);
+  return hoursSinceDeparture > 24;
+}
+
+);
     
     removed = before - flights.length;
   }
   
   if (removed > 0) {
-    console.log(`🗑️  Cleaned up ${removed} old flights`);
+    console.log(`ðŸ—‘ï¸  Cleaned up ${removed} old flights`);
   }
 }
 
@@ -277,6 +446,7 @@ app.get('/api/health', async (req, res) => {
  */
 app.get('/api/flights', async (req, res) => {
   try {
+    const includePast = req.query.includePast === 'true';
     let allFlights;
     
     if (USE_DATABASE && FlightModel) {
@@ -285,10 +455,15 @@ app.get('/api/flights', async (req, res) => {
       allFlights = flights;
     }
     
+    // Separate active and past flights
+    const activeFlights = includePast ? allFlights : allFlights.filter(f => !isFlightInPast(f));
+    const pastFlights = allFlights.filter(f => isFlightInPast(f));
+    
     res.json({
       success: true,
-      count: allFlights.length,
-      flights: allFlights,
+      count: activeFlights.length,
+      flights: activeFlights,
+      pastFlightCount: pastFlights.length,
       usingDatabase: USE_DATABASE
     });
   } catch (error) {
@@ -330,6 +505,36 @@ app.get('/api/flights/:id', async (req, res) => {
     res.status(500).json({
       success: false,
       error: 'Failed to fetch flight'
+    });
+  }
+});
+
+/**
+ * Get past flights
+ */
+app.get('/api/flights/past', async (req, res) => {
+  try {
+    let allFlights;
+    
+    if (USE_DATABASE && FlightModel) {
+      allFlights = await FlightModel.getAll({ recentOnly: false });
+    } else {
+      allFlights = flights;
+    }
+    
+    // Filter to only past flights
+    const pastFlights = allFlights.filter(f => isFlightInPast(f));
+    
+    res.json({
+      success: true,
+      count: pastFlights.length,
+      flights: pastFlights
+    });
+  } catch (error) {
+    console.error('Error fetching past flights:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch past flights'
     });
   }
 });
@@ -723,13 +928,13 @@ app.get('/api/search', async (req, res) => {
 // Update flight statuses every 5 minutes
 const updateInterval = parseInt(process.env.STATUS_UPDATE_INTERVAL) || 5;
 cron.schedule(`*/${updateInterval} * * * *`, () => {
-  console.log('⏰ Running scheduled flight status update...');
+  console.log('â° Running scheduled flight status update...');
   updateAllFlights();
 });
 
 // Cleanup old flights every hour
 cron.schedule('0 * * * *', () => {
-  console.log('⏰ Running scheduled cleanup...');
+  console.log('â° Running scheduled cleanup...');
   cleanupOldFlights();
 });
 
@@ -761,18 +966,18 @@ app.use((err, req, res, next) => {
 
 app.listen(PORT, () => {
   console.log(`
-╔════════════════════════════════════════════════════════╗
-║                                                        ║
-║         Employee Flight Tracker - Server Running      ║
-║                                                        ║
-║  🌐 Server:    http://localhost:${PORT}                   ║
-║  📊 API:       http://localhost:${PORT}/api/flights       ║
-║  ❤️  Health:    http://localhost:${PORT}/api/health       ║
-║                                                        ║
-║  📝 Environment: ${process.env.NODE_ENV || 'development'}                    ║
-║  ✈️  FlightAware: ${process.env.FLIGHTAWARE_API_KEY ? 'Enabled' : 'Mock Mode'}                     ║
-║                                                        ║
-╚════════════════════════════════════════════════════════╝
+â•”â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•—
+â•‘                                                        â•‘
+â•‘         Employee Flight Tracker - Server Running      â•‘
+â•‘                                                        â•‘
+â•‘  ðŸŒ Server:    http://localhost:${PORT}                   â•‘
+â•‘  ðŸ“Š API:       http://localhost:${PORT}/api/flights       â•‘
+â•‘  â¤ï¸  Health:    http://localhost:${PORT}/api/health       â•‘
+â•‘                                                        â•‘
+â•‘  ðŸ“ Environment: ${process.env.NODE_ENV || 'development'}                    â•‘
+â•‘  âœˆï¸  FlightAware: ${process.env.FLIGHTAWARE_API_KEY ? 'Enabled' : 'Mock Mode'}                     â•‘
+â•‘                                                        â•‘
+â•šâ•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
   `);
 });
 
