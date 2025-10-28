@@ -76,6 +76,10 @@ async function loadFlights() {
 // Render flights in card layout
 function renderFlights() {
     const container = document.getElementById('flightsContainer');
+
+    const displayFlights = showPastFlights
+        ? flights
+        : flights.filter(f => !isFlightInPast(f));
     
     if (flights.length === 0) {
         renderEmptyState();
@@ -84,6 +88,16 @@ function renderFlights() {
     
     const flightCards = flights.map(flight => renderFlightCard(flight)).join('');
     container.innerHTML = flightCards;
+}
+
+function isFlightInPast(flight) {
+    const now = new Date();
+    const departureTime = new Date(flight.departure_time || flight.departureTime);
+
+    if (isNaN(departureTime.getTime())) return false;
+
+    const hoursSinceDeparture = (now - departureTime) / (1000 * 60 * 60);
+    return hoursSinceDparture > 8; 
 }
 
 // Render a single flight card
@@ -283,6 +297,14 @@ function setupEventListeners() {
         downloadSampleTemplate();
     });
 }
+let showPastFlights = false;
+
+document.getElementById('togglePastFlights').addEventListener('click', () => {
+    showPastFlights = !showPastFlights;
+    const btn = document.getElementById('togglePastFlights');
+    btn.textContent = showPastFlights ? 'Hide Past Flights' : 'Show Past Flights';
+    renderFlights();
+});
 
 // Handle manual form submission
 async function handleManualFormSubmit(event) {
