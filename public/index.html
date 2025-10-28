@@ -156,10 +156,39 @@
             box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
         }
 
+        .dashboard-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+            gap: 15px;
+        }
+
+        .dashboard-title {
+            flex: 1;
+        }
+
         .dashboard h2 {
             color: #2d3748;
-            margin-bottom: 20px;
             font-size: 1.8em;
+            margin-bottom: 5px;
+        }
+
+        #flightCount {
+            color: #718096;
+            font-size: 0.95em;
+        }
+
+        #togglePastFlights {
+            background: #4299e1;
+            padding: 10px 20px;
+            font-size: 0.95em;
+            white-space: nowrap;
+        }
+
+        #togglePastFlights:hover {
+            background: #3182ce;
         }
 
         .status-legend {
@@ -331,6 +360,10 @@
 
         .toast.error {
             background: #f56565;
+        }
+
+        .toast.info {
+            background: #4299e1;
         }
 
         /* Flight Card Styles */
@@ -543,10 +576,16 @@
 
         <!-- Flight Dashboard -->
         <div class="dashboard">
-            <h2>🛫 Flight Dashboard</h2>
-            <button id="togglePastFlights" class="btn-small" style="background: #718096; color:white;">
-                Show Past Flights
-            </button>
+            <div class="dashboard-header">
+                <div class="dashboard-title">
+                    <h2>🛫 Flight Dashboard</h2>
+                    <div id="flightCount" style="color: #718096; font-size: 0.95em; margin-top: 5px;">
+                        Loading flights...
+                    </div>
+                </div>
+                <button id="togglePastFlights">📜 Show Past Flights</button>
+            </div>
+            
             <div class="status-legend">
                 <div class="legend-item">
                     <div class="legend-dot status-on-time"></div>
