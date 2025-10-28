@@ -276,6 +276,12 @@ function setupEventListeners() {
     document.getElementById('uploadBtn').addEventListener('click', () => {
         document.getElementById('fileInput').click();
     });
+    
+    // Download sample template
+    document.getElementById('downloadSample').addEventListener('click', (e) => {
+        e.preventDefault();
+        downloadSampleTemplate();
+    });
 }
 
 // Handle manual form submission
@@ -323,6 +329,69 @@ async function handleManualFormSubmit(event) {
         console.error('Error adding flight:', error);
         showToast('Error adding flight', 'error');
     }
+}
+
+// Download sample Excel template
+function downloadSampleTemplate() {
+    // Create sample data
+    const sampleData = [
+        {
+            'Employee Name': 'John Doe',
+            'Flight Number': 'AA1234',
+            'Departure Time': '2025-11-05 10:00',
+            'Origin': 'JFK',
+            'Destination': 'LAX'
+        },
+        {
+            'Employee Name': 'Jane Smith',
+            'Flight Number': 'DL5678',
+            'Departure Time': '2025-11-05 14:30',
+            'Origin': 'ATL',
+            'Destination': 'ORD'
+        },
+        {
+            'Employee Name': 'Bob Johnson',
+            'Flight Number': 'UA9012',
+            'Departure Time': '2025-11-06 08:15',
+            'Origin': 'SFO',
+            'Destination': 'SEA'
+        },
+        {
+            'Employee Name': 'Alice Williams',
+            'Flight Number': 'SW3456',
+            'Departure Time': '2025-11-06 16:45',
+            'Origin': 'DEN',
+            'Destination': 'PHX'
+        },
+        {
+            'Employee Name': 'Charlie Brown',
+            'Flight Number': 'B62890',
+            'Departure Time': '2025-11-07 11:20',
+            'Origin': 'BOS',
+            'Destination': 'MCO'
+        }
+    ];
+    
+    // Create workbook
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.json_to_sheet(sampleData);
+    
+    // Set column widths
+    ws['!cols'] = [
+        { wch: 20 }, // Employee Name
+        { wch: 15 }, // Flight Number
+        { wch: 20 }, // Departure Time
+        { wch: 10 }, // Origin
+        { wch: 12 }  // Destination
+    ];
+    
+    // Add worksheet to workbook
+    XLSX.utils.book_append_sheet(wb, ws, 'Flight Data');
+    
+    // Generate file and trigger download
+    XLSX.writeFile(wb, 'flight_tracker_template.xlsx');
+    
+    showToast('Sample template downloaded!', 'success');
 }
 
 // Handle file selection
