@@ -397,7 +397,7 @@ function isFlightInPast(flight) {
   return hoursSinceDeparture > 24;
 }
 
-);
+
     
     removed = before - flights.length;
   }
