@@ -319,7 +319,7 @@ async function cleanupOldFlights() {
       const hoursSinceDeparture = (now - departureTime) / (1000 * 60 * 60);
       
       return hoursSinceDeparture < 48; // Keep flights from last 48 hours
-    }
+    })
 /**
  * Determine if a flight should be actively monitored
  * Only monitor flights that are:
