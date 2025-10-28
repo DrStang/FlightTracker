@@ -84,29 +84,44 @@ function isFlightInPast(flight) {
     // If we have actual arrival time and it's more than 2 hours ago
     if (statusDetails.actualArrival) {
         const actualArrival = new Date(statusDetails.actualArrival);
-        const hoursSinceLanding = (now - actualArrival) / (1000 * 60 * 60);
-        return hoursSinceLanding > 2;
+        if (!isNaN(actualArrival.getTime())) {
+            const hoursSinceLanding = (now - actualArrival) / (1000 * 60 * 60);
+            if (hoursSinceLanding > 2) {
+                return true;
+            }
+        }
     }
     
     // If we have estimated arrival and it's more than 2 hours ago
     if (statusDetails.estimatedArrival) {
         const estimatedArrival = new Date(statusDetails.estimatedArrival);
-        const hoursSinceEstimated = (now - estimatedArrival) / (1000 * 60 * 60);
-        return hoursSinceEstimated > 2;
+        if (!isNaN(estimatedArrival.getTime())) {
+            const hoursSinceEstimated = (now - estimatedArrival) / (1000 * 60 * 60);
+            if (hoursSinceEstimated > 2) {
+                return true;
+            }
+        }
     }
     
     // If scheduled arrival is more than 4 hours ago
     if (statusDetails.scheduledArrival) {
         const scheduledArrival = new Date(statusDetails.scheduledArrival);
-        const hoursSinceScheduled = (now - scheduledArrival) / (1000 * 60 * 60);
-        return hoursSinceScheduled > 4;
+        if (!isNaN(scheduledArrival.getTime())) {
+            const hoursSinceScheduled = (now - scheduledArrival) / (1000 * 60 * 60);
+            if (hoursSinceScheduled > 4) {
+                return true;
+            }
+        }
     }
     
-    // If departure time is more than 8 hours ago and we have no arrival info
+    // MAIN FILTER: If departure time is more than 8 hours ago
+    // This catches all old flights regardless of status details
     const departureTime = new Date(flight.departure_time || flight.departureTime);
     if (!isNaN(departureTime.getTime())) {
         const hoursSinceDeparture = (now - departureTime) / (1000 * 60 * 60);
-        return hoursSinceDeparture > 8;
+        if (hoursSinceDeparture > 8) {
+            return true;
+        }
     }
     
     return false;
@@ -116,10 +131,26 @@ function isFlightInPast(flight) {
 function renderFlights() {
     const container = document.getElementById('flightsContainer');
     
+    // DEBUG: Log all flights to see their details
+    console.log('All flights:', flights.length);
+    flights.forEach(f => {
+        const dept = new Date(f.departure_time || f.departureTime);
+        const hoursSince = (new Date() - dept) / (1000 * 60 * 60);
+        const isPast = isFlightInPast(f);
+        console.log(`Flight ${f.flight_number || f.flightNumber}:`, {
+            departureTime: f.departure_time || f.departureTime,
+            hoursSinceDeparture: hoursSince.toFixed(2),
+            isPast: isPast,
+            statusDetails: f.status_details || f.statusDetails
+        });
+    });
+    
     // Filter based on showPastFlights toggle
     const displayFlights = showPastFlights 
         ? flights 
         : flights.filter(f => !isFlightInPast(f));
+    
+    console.log('Display flights:', displayFlights.length, 'Show past:', showPastFlights);
     
     if (displayFlights.length === 0) {
         if (showPastFlights && flights.length > 0) {
