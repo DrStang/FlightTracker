@@ -97,7 +97,7 @@ function isFlightInPast(flight) {
     if (isNaN(departureTime.getTime())) return false;
 
     const hoursSinceDeparture = (now - departureTime) / (1000 * 60 * 60);
-    return hoursSinceDparture > 8; 
+    return hoursSinceDeparture > 8; 
 }
 
 // Render a single flight card
