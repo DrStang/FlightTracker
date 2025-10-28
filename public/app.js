@@ -558,3 +558,7 @@ window.addEventListener('beforeunload', () => {
         clearInterval(autoRefreshInterval);
     }
 });
+
+// Make functions globally accessible for onclick handlers
+window.deleteFlight = deleteFlight;
+window.refreshFlight = refreshFlight;
