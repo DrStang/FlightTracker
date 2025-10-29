@@ -126,7 +126,7 @@ const upload = multer({
  * Determine if a flight should be actively monitored
  * Only monitor flights that are:
  * - Within 7 days before departure
- * - Not yet landed (or within 6 hours after scheduled arrival)
+ * - Not more than 8 hours past departure
  */
 function shouldMonitorFlight(flight) {
   const now = new Date();
@@ -138,24 +138,35 @@ function shouldMonitorFlight(flight) {
     return false; // Too far in the future
   }
   
-  // Check if flight has landed (use actual arrival if available, otherwise estimate)
+  // NEW: Stop monitoring if flight departed more than 8 hours ago
+  // This matches the isFlightInPast logic
+  const hoursSinceDeparture = (now - departureTime) / (1000 * 60 * 60);
+  if (hoursSinceDeparture > 8) {
+    return false; // Flight is in the past, stop monitoring
+  }
+  
+  // Check if flight has landed (use actual arrival if available)
   const statusDetails = flight.status_details || flight.statusDetails || {};
   
-  // If we have actual arrival time, check if it's more than 6 hours ago
+  // If we have actual arrival time, check if it's more than 2 hours ago
   if (statusDetails.actualArrival) {
     const actualArrival = new Date(statusDetails.actualArrival);
-    const hoursSinceLanding = (now - actualArrival) / (1000 * 60 * 60);
-    if (hoursSinceLanding > 6) {
-      return false; // Flight landed more than 6 hours ago
+    if (!isNaN(actualArrival.getTime())) {
+      const hoursSinceLanding = (now - actualArrival) / (1000 * 60 * 60);
+      if (hoursSinceLanding > 2) {
+        return false; // Flight landed more than 2 hours ago
+      }
     }
   }
   
-  // If we have estimated arrival, check if it's in the past
+  // If we have estimated arrival, check if it's more than 2 hours in the past
   if (statusDetails.estimatedArrival) {
     const estimatedArrival = new Date(statusDetails.estimatedArrival);
-    const hoursSinceEstimatedArrival = (now - estimatedArrival) / (1000 * 60 * 60);
-    if (hoursSinceEstimatedArrival > 6) {
-      return false; // Estimated arrival was more than 6 hours ago
+    if (!isNaN(estimatedArrival.getTime())) {
+      const hoursSinceEstimatedArrival = (now - estimatedArrival) / (1000 * 60 * 60);
+      if (hoursSinceEstimatedArrival > 2) {
+        return false; // Estimated arrival was more than 2 hours ago
+      }
     }
   }
   
@@ -291,28 +302,57 @@ async function updateAllFlights() {
   }
   
   // Filter to only flights that should be actively monitored
-  const activeFlights = allFlights.filter(flight => shouldMonitorFlight(flight));
-  const skippedCount = allFlights.length - activeFlights.length;
+  const now = new Date();
+  const activeFlights = [];
+  const skippedFlights = {
+    tooFarOut: [],
+    alreadyPast: [],
+    alreadyLanded: []
+  };
   
-  console.log('Starting status update for ' + allFlights.length + ' flights...');
-  if (skippedCount > 0) {
-    console.log('  Skipping ' + skippedCount + ' flights (too far out or already landed)');
+  for (const flight of allFlights) {
+    const departureTime = new Date(flight.departure_time || flight.departureTime);
+    const daysUntil = (departureTime - now) / (1000 * 60 * 60 * 24);
+    const hoursSince = (now - departureTime) / (1000 * 60 * 60);
+    
+    if (daysUntil > 7) {
+      skippedFlights.tooFarOut.push(flight.flight_number || flight.flightNumber);
+    } else if (hoursSince > 8) {
+      skippedFlights.alreadyPast.push(flight.flight_number || flight.flightNumber);
+    } else if (shouldMonitorFlight(flight)) {
+      activeFlights.push(flight);
+    } else {
+      skippedFlights.alreadyLanded.push(flight.flight_number || flight.flightNumber);
+    }
   }
-  console.log('  Monitoring ' + activeFlights.length + ' active flights');
+  
+  console.log(`\n📊 Flight Status Update Summary:`);
+  console.log(`   Total flights: ${allFlights.length}`);
+  console.log(`   ✅ Monitoring: ${activeFlights.length}`);
+  
+  if (skippedFlights.tooFarOut.length > 0) {
+    console.log(`   ⏭️  Too far out (>7 days): ${skippedFlights.tooFarOut.length} - ${skippedFlights.tooFarOut.join(', ')}`);
+  }
+  if (skippedFlights.alreadyPast.length > 0) {
+    console.log(`   🕐 Past (>8 hours): ${skippedFlights.alreadyPast.length} - ${skippedFlights.alreadyPast.join(', ')}`);
+  }
+  if (skippedFlights.alreadyLanded.length > 0) {
+    console.log(`   🛬 Landed: ${skippedFlights.alreadyLanded.length} - ${skippedFlights.alreadyLanded.join(', ')}`);
+  }
   
   for (const flight of activeFlights) {
     const departureTime = new Date(flight.departure_time || flight.departureTime);
     const now = new Date();
     const daysUntil = ((departureTime - now) / (1000 * 60 * 60 * 24)).toFixed(1);
     
-    console.log('    Checking ' + (flight.flight_number || flight.flightNumber) + ' (' + daysUntil + ' days until departure)');
+    console.log(`   🔄 Checking ${flight.flight_number || flight.flightNumber} (${daysUntil} days until departure)`);
     
     await updateFlightStatus(flight.id);
     // Add small delay to avoid rate limiting
     await new Promise(resolve => setTimeout(resolve, 1000));
   }
   
-  console.log('Status update complete');
+  console.log('✅ Status update complete\n');
 }
 
 /**
